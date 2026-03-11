@@ -38,12 +38,23 @@ const App = {
   replayIdx: 0,
   replayPlaying: false,
   replayTimer: null,
-  profile: {userId:'u_'+Math.random().toString(36).slice(2,8),username:'Guest',wins:0,losses:0,draws:0,rating:1200},
+  _fullHistory: [], // BUG-04 FIX: Preserve history
+  profile: {userId:'',username:'Guest',wins:0,losses:0,draws:0,rating:1200},
   settings: {sound:true,anim:true,particles:true,animSpeed:1,theme:'classic',clock:600},
 
   init(){
     try{ const s=localStorage.getItem('cm_settings'); if(s)this.settings={...this.settings,...JSON.parse(s)}; }catch(e){}
     try{ const p=localStorage.getItem('cm_profile'); if(p)this.profile={...this.profile,...JSON.parse(p)}; }catch(e){}
+    
+    // BUG-06 FIX: Stable Identity Generation
+    let storedId = null;
+    try { storedId = localStorage.getItem('cm_userId'); } catch(e) {}
+    if (!storedId) {
+      storedId = window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'u_' + Math.random().toString(36).slice(2,8);
+      try { localStorage.setItem('cm_userId', storedId); } catch(e) {}
+    }
+    this.profile.userId = storedId;
+
     this.applySettings();
 
     this.renderer=new BoardRenderer(this.game);
@@ -72,7 +83,8 @@ const App = {
       sq.style.transform='scale(0.8)';
       setTimeout(()=>{ sq.style.transition='opacity 0.2s,transform 0.2s cubic-bezier(.25,.8,.25,1.2)'; sq.style.opacity='1'; sq.style.transform=''; },i*8);
     });
-    setTimeout(()=>{ this.renderer._rebuildPieces(); this.renderer.render(null,[]); },200);
+    // BUG-12 FIX: Removed this.renderer._rebuildPieces() to prevent duplicates
+    setTimeout(()=>{ this.renderer.render(null,[]); },200);
   },
 
   selectSquare(r,c){
@@ -104,7 +116,8 @@ const App = {
   },
 
   handleDrop(fr,fc,tr,tc){
-    if(!this.gameActive||this.replayMode)return;
+    // BUG-08 FIX: Added this.boardLocked guard
+    if(!this.gameActive || this.boardLocked || this.replayMode) return; 
     const move=this.legalMoves.find(m=>m.to[0]===tr&&m.to[1]===tc);
     if(move){ if(move.special==='promo'){this.showPromoModal(move);return;} this.executeMove(move); }
     else { this.sound.illegal(); this.clearSelection(); this.renderer.render(null,[]); }
@@ -127,6 +140,7 @@ const App = {
     }
 
     this.game.makeMove(move);
+    this._fullHistory = [...this.game.history]; // BUG-04 FIX: Snapshot full history
 
     if(move.special==='castleK'||move.special==='castleQ') this.sound.castle();
     else if(wasCapture) this.sound.capture();
@@ -158,7 +172,6 @@ const App = {
     this.updateStatus();
     this.updatePlayerBars();
 
-    // ONLINE EMIT: Properly tied to this.roomId which is now fixed
     if(this.mode==='online'&&!fromOpponent&&this.socket){ 
       this.socket.emit('move',{roomId:this.roomId,move}); 
     }
@@ -192,6 +205,13 @@ const App = {
   },
 
   newGame(){
+    // BUG-07 FIX: Prevent breaking online games
+    if (this.mode === 'online') {
+      this.toast.show('Start a new game from the Online tab', 'info');
+      return;
+    }
+
+    this._fullHistory = []; // BUG-04 Reset
     this.replayMode = false; 
     this.replayIdx = 0;
     this.stopReplayPlay();
@@ -201,16 +221,13 @@ const App = {
     this.boardLocked = false;
     this.gameActive = true;
 
-    // AI RESET FIX
-    this.mode = 'ai'; 
-
     const sel = document.getElementById('colorSel').value;
     if(sel === 'r') {
       this.playerColor = Math.random() < 0.5 ? 'w' : 'b';
     } else {
       this.playerColor = sel;
     }
-    this.myColor = this.playerColor; // Sync for consistency
+    this.myColor = this.playerColor; 
     this.aiColor = this.game.opp(this.playerColor);
 
     this.renderer.flipped = (this.playerColor === 'b');
@@ -228,6 +245,7 @@ const App = {
       this.updateCaptured(); 
       this.updateStatus(); 
       this.updatePlayerBars();
+      this.setNamesForMode(); // BUG-18 FIX
       this.sound.start();
       
       document.getElementById('boardWrap').classList.remove('victory');
@@ -257,19 +275,32 @@ const App = {
 
   flipBoard(){ this.renderer.flip(); this.renderer.render(null,[]); },
 
+  // Shared end-game helper for saving records properly
+  _onGameEnd() {
+    this.saveReplay();
+    this.pushLeaderboard();
+    this.updateProfileUI();
+  },
+
   resign(){
     if(!this.gameActive)return;
     this.gameActive=false; this.stopClock();
     const winner=this.game.opp(this.game.turn);
     this.showGameOver(winner==='w'?'White Wins':'Black Wins','by resignation ✦',false);
     this.profile.losses++; this.saveSettingsLocal();
+    this._onGameEnd(); // BUG-09 FIX
     document.getElementById('resignBtn').disabled=true;
   },
 
   offerDraw(){
     if(!this.gameActive)return;
     if(this.mode==='online'&&this.socket){ this.socket.emit('offer_draw',{roomId:this.roomId}); this.toast.show('Draw offered to opponent','info'); return; }
-    if(confirm('Accept draw?')){ this.gameActive=false; this.stopClock(); this.showGameOver('Draw','by agreement',false); this.profile.draws++; this.saveSettingsLocal(); }
+    if(confirm('Accept draw?')){ 
+      this.gameActive=false; this.stopClock(); 
+      this.showGameOver('Draw','by agreement',false); 
+      this.profile.draws++; this.saveSettingsLocal(); 
+      this._onGameEnd(); // BUG-10 FIX
+    }
   },
 
   endGame(){
@@ -311,9 +342,7 @@ const App = {
     
     setTimeout(() => this.showGameOver(title, sub, isWin), 600);
     
-    this.saveReplay(); 
-    this.pushLeaderboard(); 
-    this.updateProfileUI();
+    this._onGameEnd(); 
   },
 
   startClock(){
@@ -326,10 +355,10 @@ const App = {
     },1000);
   },
   stopClock(){ clearInterval(this.clockInterval); this.clockInterval=null; },
+  
   updateClocks(){
+    // BUG-17 FIX: Removed unused variables
     ['w','b'].forEach(co=>{
-      const player=(this.playerColor==='w')?co:this.game.opp(co);
-      const id=co==='w'?'clockPlayer':'clockOpponent';
       const isPlayerWhite=(this.playerColor==='w'||this.mode!=='ai');
       const clockId=(co==='w')?(isPlayerWhite?'clockPlayer':'clockOpponent'):(isPlayerWhite?'clockOpponent':'clockPlayer');
       const el=document.getElementById(clockId);
@@ -398,7 +427,8 @@ const App = {
   },
 
   jumpToMove(idx){
-    const allMoves=[...this.game.history];
+    // BUG-04 FIX: Use _fullHistory
+    const allMoves = this._fullHistory && this._fullHistory.length > 0 ? this._fullHistory : [...this.game.history];
     this.game.reset();
     for(let i=0;i<Math.min(idx,allMoves.length);i++) this.game.makeMove(allMoves[i]);
     this.replayIdx=idx;
@@ -406,9 +436,12 @@ const App = {
     setTimeout(()=>{ this.renderer.render(null,[]); this.updateStatus(); this.updateCaptured(); this.updateMoveList(); },50);
   },
   replayFirst(){ if(this.game.history.length)this.jumpToMove(0); },
-  replayLast(){ this.jumpToMove(this.game.history.length); },
+  replayLast(){ this.jumpToMove((this._fullHistory && this._fullHistory.length > 0 ? this._fullHistory : this.game.history).length); },
   replayPrev(){ if(this.replayIdx>0)this.jumpToMove(this.replayIdx-1); },
-  replayNext(){ if(this.replayIdx<this.game.history.length)this.jumpToMove(this.replayIdx+1); },
+  replayNext(){ 
+    const max = (this._fullHistory && this._fullHistory.length > 0 ? this._fullHistory : this.game.history).length;
+    if(this.replayIdx < max) this.jumpToMove(this.replayIdx+1); 
+  },
   scrubReplay(val){ this.jumpToMove(parseInt(val)); },
   toggleReplayPlay(){
     this.replayPlaying=!this.replayPlaying;
@@ -586,7 +619,7 @@ const App = {
   async pushLeaderboard(){
     try{
       const d=await this.api.post('/api/leaderboard',{userId:this.profile.userId,username:this.profile.username,wins:this.profile.wins,losses:this.profile.losses,draws:this.profile.draws});
-      this.s3log.log(`✅ Leaderboard updated on S3 (rank #${d.rank})`,'ok');
+      this.s3log.log(`✅ Leaderboard updated on S3`,'ok');
     }catch(e){ this.s3log.log('❌ Leaderboard update failed','err'); }
   },
   async loadLeaderboard(){
@@ -601,30 +634,36 @@ const App = {
 
   initSocket(){
     if(this.socket)return;
-    // CONNECTION FIX
     this.socket=io();
     
     let pingStart=0;
-    this.socket.on('connect',()=>{ this.s3log.log('✅ WebSocket connected','ok'); pingStart=Date.now(); this.socket.emit('ping_check'); });
+    this.socket.on('connect',()=>{ 
+      this.s3log.log('✅ WebSocket connected','ok'); 
+      pingStart=Date.now(); 
+      this.socket.emit('ping_check'); 
+      // BUG-13 FIX: Store interval ID
+      this.pingInterval = setInterval(()=>{ if(this.socket){pingStart=Date.now();this.socket.emit('ping_check');} },3000);
+    });
+    
+    // BUG-13 FIX: Clear interval on disconnect
+    this.socket.on('disconnect', () => { clearInterval(this.pingInterval); });
+
     this.socket.on('pong_check',()=>{ const ms=Date.now()-pingStart; const el=document.getElementById('pingDisplay'); if(el){el.textContent=ms+'ms'; el.className='latency '+(ms<100?'good':'bad');} });
-    setInterval(()=>{ if(this.socket){pingStart=Date.now();this.socket.emit('ping_check');} },3000);
     
     this.socket.on('room_created',({color,roomId:rid})=>{
-      // COLOR SYNC FIX
       this.myColor=color; this.playerColor=color; this.roomId=rid;
       document.getElementById('roomCodeDisplay').textContent=rid;
       document.getElementById('roomCreated').style.display='block';
     });
     
     this.socket.on('room_joined',({color, roomId:rid})=>{ 
-      // ROOM ID & COLOR SYNC FIX
       this.myColor=color; this.playerColor=color; this.roomId=rid; 
     });
     
     this.socket.on('room_error',msg=>this.toast.show('❌ '+msg,'error'));
     
     this.socket.on('game_start',({white,black})=>{
-      this.mode = 'online'; // STATE SYNC
+      this.mode = 'online'; 
       this.game.reset(); this.gameActive=true; 
       this.renderer.flipped=(this.myColor==='b');
       this.renderer.initBoard(); setTimeout(()=>this.renderer.render(null,[]),50);
@@ -638,7 +677,14 @@ const App = {
     });
     
     this.socket.on('opponent_move',move=>{ this.executeMove(move,true); });
-    this.socket.on('opponent_disconnected',({username})=>{ this.gameActive=false; this.stopClock(); this.toast.show(`${username} disconnected — you win!`,'info'); this.profile.wins++; this.updateProfileUI(); });
+    
+    this.socket.on('opponent_disconnected',({username})=>{ 
+      this.gameActive=false; this.stopClock(); 
+      this.toast.show(`${username} disconnected — you win!`,'info'); 
+      this.profile.wins++; 
+      this._onGameEnd(); // BUG-11 FIX
+    });
+    
     this.socket.on('game_over_mp',({reason})=>{ this.gameActive=false; this.stopClock(); this.showGameOver('Game Over',reason==='resign'?'Opponent resigned':'Draw agreed'); });
     this.socket.on('draw_offered',()=>{ if(confirm('Opponent offers a draw. Accept?'))this.socket.emit('accept_draw',{roomId:this.roomId}); });
   },
