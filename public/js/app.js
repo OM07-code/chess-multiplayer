@@ -86,7 +86,6 @@ const App = {
   },
 
   handleSquareClick(r,c){
-    // Ignore clicks if game is over or animation is playing
     if(!this.gameActive || this.boardLocked) return; 
     if(this.replayMode)return;
     if(this.mode==='online'&&this.game.turn!==this.myColor)return;
@@ -112,7 +111,6 @@ const App = {
   },
 
   async executeMove(move, fromOpponent=false){
-    // 1. Lock the board and instantly clear UI highlights
     this.boardLocked = true;
     this.clearSelection();
     this.renderer.render(null, []);
@@ -120,7 +118,6 @@ const App = {
     const wasCapture=!!move.capture;
     const wasCheck=this.game.status==='check';
 
-    // (Wait for animations...)
     await this.renderer.animateMove(move);
 
     if(wasCapture){
@@ -155,14 +152,16 @@ const App = {
       if(rook){ delete this.renderer.pieceEls[row+','+oldC]; rook.dataset.r=row; rook.dataset.c=newC; const pos=this.renderer.sqPos(row,newC); rook.style.left=pos.left+'px'; rook.style.top=pos.top+'px'; this.renderer.pieceEls[row+','+newC]=rook; }
     }
 
-    // 2. Refresh final state 
     this.renderer.render(null,[]);
     this.updateMoveList();
     this.updateCaptured();
     this.updateStatus();
     this.updatePlayerBars();
 
-    if(this.mode==='online'&&!fromOpponent&&this.socket){ this.socket.emit('move',{roomId:this.roomId,move}); }
+    // ONLINE EMIT: Properly tied to this.roomId which is now fixed
+    if(this.mode==='online'&&!fromOpponent&&this.socket){ 
+      this.socket.emit('move',{roomId:this.roomId,move}); 
+    }
 
     if(this.game.status==='check'){
       this.sound.check();
@@ -170,7 +169,6 @@ const App = {
       setTimeout(()=>document.getElementById('boardWrap').classList.remove('check-shake'),500);
     }
 
-    // 3. Unlock the board!
     this.boardLocked = false; 
 
     if(this.game.status==='checkmate'||this.game.status==='stalemate'||this.game.status==='draw'){ this.endGame(); return; }
@@ -178,9 +176,7 @@ const App = {
     if(this.mode==='ai'&&this.game.turn===this.aiColor&&this.gameActive){ this.scheduleAI(); }
   },
 
-  // ADDED MISSING FUNCTION HERE
   scheduleAI(){
-    // This guard prevents AI from moving during Online or Replay modes
     if (this.mode !== 'ai' || this.replayMode) return; 
 
     this.setStatus('AI thinking...','ai-thinking');
@@ -205,22 +201,19 @@ const App = {
     this.boardLocked = false;
     this.gameActive = true;
 
-    // --- FIX STARTS HERE ---
-    // 1. Set mode to 'ai' for local play
+    // AI RESET FIX
     this.mode = 'ai'; 
 
-    // 2. Get the color preference from the UI
     const sel = document.getElementById('colorSel').value;
     if(sel === 'r') {
       this.playerColor = Math.random() < 0.5 ? 'w' : 'b';
     } else {
       this.playerColor = sel;
     }
+    this.myColor = this.playerColor; // Sync for consistency
     this.aiColor = this.game.opp(this.playerColor);
 
-    // 3. Handle Board Orientation
     this.renderer.flipped = (this.playerColor === 'b');
-    // --- FIX ENDS HERE ---
 
     this.clocks = { w: this.settings.clock, b: this.settings.clock };
     this.updateClocks(); 
@@ -240,7 +233,6 @@ const App = {
       document.getElementById('boardWrap').classList.remove('victory');
       document.getElementById('boardOverlay').classList.remove('checkmate');
       
-      // If AI is White, it must move first immediately
       if(this.aiColor === 'w') {
         this.scheduleAI();
       }
@@ -293,7 +285,6 @@ const App = {
       title = (winnerColor === 'w' ? 'White' : 'Black') + ' Wins!';
       sub = 'Checkmate ✦';
       
-      // Determine if the LOCAL player won
       const localPlayerWon = (this.mode === 'ai' && winnerColor === this.playerColor) || 
                              (this.mode === 'online' && winnerColor === this.myColor);
       
@@ -320,7 +311,6 @@ const App = {
     
     setTimeout(() => this.showGameOver(title, sub, isWin), 600);
     
-    // Trigger S3 Persistence
     this.saveReplay(); 
     this.pushLeaderboard(); 
     this.updateProfileUI();
@@ -534,14 +524,12 @@ const App = {
     try {
       this.s3log.log(`Searching for ${targetName}...`, 'info');
       
-      // Call the new "by-name" endpoint
       const d = await this.api.get('/api/user/by-name/' + targetName);
       
       if (!d || d.error) {
         throw new Error("Username not found on S3");
       }
       
-      // Successfully found the profile linked to that name!
       this.profile = { ...this.profile, ...d };
       localStorage.setItem('cm_profile', JSON.stringify(this.profile));
       
@@ -613,20 +601,32 @@ const App = {
 
   initSocket(){
     if(this.socket)return;
+    // CONNECTION FIX
     this.socket=io();
+    
     let pingStart=0;
     this.socket.on('connect',()=>{ this.s3log.log('✅ WebSocket connected','ok'); pingStart=Date.now(); this.socket.emit('ping_check'); });
     this.socket.on('pong_check',()=>{ const ms=Date.now()-pingStart; const el=document.getElementById('pingDisplay'); if(el){el.textContent=ms+'ms'; el.className='latency '+(ms<100?'good':'bad');} });
     setInterval(()=>{ if(this.socket){pingStart=Date.now();this.socket.emit('ping_check');} },3000);
+    
     this.socket.on('room_created',({color,roomId:rid})=>{
-      this.myColor=color; this.roomId=rid;
+      // COLOR SYNC FIX
+      this.myColor=color; this.playerColor=color; this.roomId=rid;
       document.getElementById('roomCodeDisplay').textContent=rid;
       document.getElementById('roomCreated').style.display='block';
     });
-    this.socket.on('room_joined',({color})=>{ this.myColor=color; });
+    
+    this.socket.on('room_joined',({color, roomId:rid})=>{ 
+      // ROOM ID & COLOR SYNC FIX
+      this.myColor=color; this.playerColor=color; this.roomId=rid; 
+    });
+    
     this.socket.on('room_error',msg=>this.toast.show('❌ '+msg,'error'));
+    
     this.socket.on('game_start',({white,black})=>{
-      this.game.reset(); this.gameActive=true; this.renderer.flip(); this.renderer.flipped=(this.myColor==='b');
+      this.mode = 'online'; // STATE SYNC
+      this.game.reset(); this.gameActive=true; 
+      this.renderer.flipped=(this.myColor==='b');
       this.renderer.initBoard(); setTimeout(()=>this.renderer.render(null,[]),50);
       this.startClock();
       document.getElementById('namePlayer').textContent=this.myColor==='w'?white:black;
@@ -636,11 +636,13 @@ const App = {
       this.updateStatus(); this.toast.show(`Game started! You play ${this.myColor==='w'?'White ♔':'Black ♚'}`,'success');
       this.sound.start();
     });
+    
     this.socket.on('opponent_move',move=>{ this.executeMove(move,true); });
     this.socket.on('opponent_disconnected',({username})=>{ this.gameActive=false; this.stopClock(); this.toast.show(`${username} disconnected — you win!`,'info'); this.profile.wins++; this.updateProfileUI(); });
     this.socket.on('game_over_mp',({reason})=>{ this.gameActive=false; this.stopClock(); this.showGameOver('Game Over',reason==='resign'?'Opponent resigned':'Draw agreed'); });
     this.socket.on('draw_offered',()=>{ if(confirm('Opponent offers a draw. Accept?'))this.socket.emit('accept_draw',{roomId:this.roomId}); });
   },
+  
   createRoom(){
     this.initSocket();
     const name=document.getElementById('mpName').value||'Player';
@@ -649,6 +651,7 @@ const App = {
     this.socket.emit('create_room',{roomId:rid,username:name});
     this.toast.show('Room created! Share the code.','info');
   },
+  
   joinRoom(){
     this.initSocket();
     const code=document.getElementById('joinCode').value.trim().toUpperCase();
@@ -656,6 +659,7 @@ const App = {
     const name=document.getElementById('mpName').value||'Player';
     this.socket.emit('join_room',{roomId:code,username:name});
   },
+  
   resignOnline(){ if(this.socket&&this.roomId)this.socket.emit('resign',{roomId:this.roomId}); },
 };
 
