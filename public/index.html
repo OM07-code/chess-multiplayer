@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChessMaster — Premium Chess</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;0,700;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body class="theme-classic">
+<canvas id="particleCanvas"></canvas>
+<div id="dragGhost"></div>
+<div id="toastContainer"></div>
+
+<header>
+  <div class="logo">
+    <span class="logo-crown">♛</span>
+    ChessMaster
+  </div>
+  <div class="header-right">
+    <div class="s3-indicator" id="s3Indicator">
+      <div class="s3-dot" id="s3Dot"></div>
+      <span id="s3Label">S3</span>
+    </div>
+    <button class="header-btn" onclick="App.openSettings()">⚙ Settings</button>
+    <div class="user-chip" onclick="App.switchTab('profile')">
+      <div class="user-avatar">♚</div>
+      <span class="user-name" id="headerUser">Guest</span>
+      <span class="user-rating" id="headerRating">1200</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="board-area" id="boardArea">
+    <div class="player-bar" id="barOpponent">
+      <div class="player-indicator black" id="indicatorOpponent"></div>
+      <div class="player-info">
+        <div class="player-nm" id="nameOpponent">Black</div>
+        <div class="player-elo" id="eloOpponent">1200</div>
+      </div>
+      <div class="captured-row" id="capturedOpponent"></div>
+      <div class="clock-display" id="clockOpponent">10:00</div>
+    </div>
+    <div class="board-wrap" id="boardWrap">
+      <div class="coord-wrap">
+        <div class="rank-col" id="rankCol">
+          <span>8</span><span>7</span><span>6</span><span>5</span>
+          <span>4</span><span>3</span><span>2</span><span>1</span>
+        </div>
+        <div>
+          <div id="board"></div>
+          <div class="file-row" id="fileRow">
+            <span>a</span><span>b</span><span>c</span><span>d</span>
+            <span>e</span><span>f</span><span>g</span><span>h</span>
+          </div>
+        </div>
+      </div>
+      <div class="board-overlay" id="boardOverlay"></div>
+    </div>
+    <div class="player-bar" id="barPlayer">
+      <div class="player-indicator white active" id="indicatorPlayer"></div>
+      <div class="player-info">
+        <div class="player-nm" id="namePlayer">White</div>
+        <div class="player-elo" id="eloPlayer">1200</div>
+      </div>
+      <div class="captured-row" id="capturedPlayer"></div>
+      <div class="clock-display active" id="clockPlayer">10:00</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="tabs" id="tabs">
+      <div class="tab active"     onclick="App.switchTab('game')">Game</div>
+      <div class="tab"            onclick="App.switchTab('online')">Online</div>
+      <div class="tab"            onclick="App.switchTab('replays')">Replays</div>
+      <div class="tab"            onclick="App.switchTab('leaders')">Leaders</div>
+      <div class="tab"            onclick="App.switchTab('profile')">Profile</div>
+    </div>
+
+    <div class="tab-pane active" id="pane-game">
+      <div class="status-bar" id="statusBar">White to move</div>
+      <div class="field">
+        <label>Game Mode</label>
+        <div class="mode-grid">
+          <div class="mode-card active" id="modeAI" onclick="App.setMode('ai')">
+            <span class="mode-icon">🤖</span><span class="mode-label">vs AI</span>
+          </div>
+          <div class="mode-card" id="modeLocal" onclick="App.setMode('local')">
+            <span class="mode-icon">👥</span><span class="mode-label">Local</span>
+          </div>
+          <div class="mode-card" id="modeOnline" onclick="App.setMode('online')">
+            <span class="mode-icon">🌐</span><span class="mode-label">Online</span>
+          </div>
+        </div>
+      </div>
+      <div id="aiSection">
+        <div class="field" style="margin-bottom:8px">
+          <label>AI Difficulty</label>
+          <div class="seg-ctrl" id="diffCtrl">
+            <div class="seg-btn"       onclick="App.setDiff(1,this)">Easy</div>
+            <div class="seg-btn active" onclick="App.setDiff(2,this)">Medium</div>
+            <div class="seg-btn"       onclick="App.setDiff(3,this)">Hard</div>
+            <div class="seg-btn"       onclick="App.setDiff(4,this)">Expert</div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Play as</label>
+          <select id="colorSel">
+            <option value="w">White ♔</option>
+            <option value="b">Black ♚</option>
+            <option value="r">Random</option>
+          </select>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-gold" onclick="App.newGame()" style="flex:1">▶ New Game</button>
+        <button class="btn btn-ghost" onclick="App.flipBoard()" title="Flip board">⇅</button>
+        <button class="btn btn-danger" id="resignBtn" onclick="App.resign()" disabled>Resign</button>
+      </div>
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <span style="font-size:0.74rem;color:var(--t-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Moves</span>
+          <div class="replay-controls" style="padding:0;gap:4px">
+            <button class="btn btn-ghost" style="padding:4px 7px;font-size:0.9rem" onclick="App.replayFirst()" title="First">⏮</button>
+            <button class="btn btn-ghost" style="padding:4px 7px;font-size:0.9rem" onclick="App.replayPrev()" title="Prev">◀</button>
+            <button class="btn btn-ghost" style="padding:4px 7px;font-size:0.9rem" id="replayPlayBtn" onclick="App.toggleReplayPlay()" title="Play">▶</button>
+            <button class="btn btn-ghost" style="padding:4px 7px;font-size:0.9rem" onclick="App.replayNext()" title="Next">▶</button>
+            <button class="btn btn-ghost" style="padding:4px 7px;font-size:0.9rem" onclick="App.replayLast()" title="Last">⏭</button>
+          </div>
+        </div>
+        <input type="range" class="replay-slider" id="replaySlider" min="0" max="0" value="0" oninput="App.scrubReplay(this.value)">
+        <div class="move-list" id="moveList"></div>
+      </div>
+      <div>
+        <div style="font-size:0.74rem;color:var(--t-muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:4px">☁ S3 Activity</div>
+        <div class="s3-log" id="s3Log"></div>
+      </div>
+    </div>
+
+    <div class="tab-pane" id="pane-online">
+      <div class="mp-card">
+        <h4>Create Room</h4>
+        <div class="field"><label>Your Name</label><input type="text" id="mpName" value="Player" placeholder="Enter name..."></div>
+        <button class="btn btn-gold btn-full" onclick="App.createRoom()">Create Game Room</button>
+        <div id="roomCreated" style="display:none">
+          <div class="room-code-display" id="roomCodeDisplay">---</div>
+          <div class="mp-status-msg waiting" id="waitMsg">⏳ Waiting for opponent<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span></div>
+        </div>
+      </div>
+      <div class="mp-card">
+        <h4>Join Room</h4>
+        <div class="field">
+          <label>Room Code</label>
+          <input type="text" id="joinCode" placeholder="e.g. ABC123" maxlength="6" style="text-transform:uppercase;letter-spacing:0.15em;font-size:1.1rem;text-align:center">
+        </div>
+        <button class="btn btn-blue btn-full" onclick="App.joinRoom()">Join Room</button>
+      </div>
+      <div id="mpGameControls" style="display:none">
+        <div class="mp-status-msg connected" id="mpGameMsg">✓ Playing online</div>
+        <div class="btn-row" style="margin-top:8px">
+          <button class="btn btn-danger" onclick="App.resignOnline()">Resign</button>
+          <button class="btn btn-ghost" onclick="App.offerDraw()">Offer Draw</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
+          <span style="font-size:0.78rem;color:var(--t-muted)">Ping:</span>
+          <span class="latency good" id="pingDisplay">--ms</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane" id="pane-replays">
+      <button class="btn btn-ghost btn-full" onclick="App.loadReplays()">↺ Load Replays from S3</button>
+      <div class="replay-list" id="replayList">
+        <div style="text-align:center;color:var(--t-muted);padding:24px;font-size:0.88rem">Click to load replays from S3</div>
+      </div>
+    </div>
+
+    <div class="tab-pane" id="pane-leaders">
+      <button class="btn btn-ghost btn-full" onclick="App.loadLeaderboard()">↺ Refresh from S3</button>
+      <table class="lb-table">
+        <thead><tr><th>#</th><th>Player</th><th>Rating</th><th>W/L/D</th></tr></thead>
+        <tbody id="lbBody"><tr><td colspan="4" style="text-align:center;color:var(--t-muted);padding:20px">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="tab-pane" id="pane-profile">
+      <div class="profile-hero">
+        <div class="profile-av-big">♚</div>
+        <div class="profile-un" id="profileName">Guest</div>
+        <div class="profile-elo">Rating: <span id="profileElo" style="color:var(--gold);font-weight:700">1200</span></div>
+      </div>
+      <div class="stats-row">
+        <div class="stat-box stat-w"><div class="stat-v" id="stWins">0</div><div class="stat-l">Wins</div></div>
+        <div class="stat-box stat-lo"><div class="stat-v" id="stLoss">0</div><div class="stat-l">Losses</div></div>
+        <div class="stat-box stat-d"><div class="stat-v" id="stDraw">0</div><div class="stat-l">Draws</div></div>
+      </div>
+      <div class="field"><label>Username</label><input type="text" id="profileInput" placeholder="Enter username..." value="Guest"></div>
+      <div class="btn-row">
+        <button class="btn btn-gold" style="flex:1" onclick="App.saveProfile()">Save to S3</button>
+        <button class="btn btn-ghost" style="flex:1" onclick="App.loadProfile()">Load from S3</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="overlay" id="promoModal">
+  <div class="modal" style="max-width:320px;text-align:center">
+    <div class="modal-title">Promote Pawn</div>
+    <p style="color:var(--t-secondary);font-size:0.88rem;margin-bottom:8px">Choose your piece</p>
+    <div class="promo-grid" id="promoGrid"></div>
+  </div>
+</div>
+
+<div class="overlay" id="gameOverModal">
+  <div class="modal" style="text-align:center">
+    <span class="result-crown" id="resultCrown">🏆</span>
+    <div class="result-title" id="resultTitle">Game Over</div>
+    <div class="result-sub" id="resultSub"></div>
+    <div class="result-btns">
+      <button class="btn btn-gold" onclick="App.newGame();App.closeModal('gameOverModal')">New Game</button>
+      <button class="btn btn-ghost" onclick="App.closeModal('gameOverModal')">Review</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="settingsModal">
+  <div class="modal">
+    <div class="modal-title">⚙ Settings</div>
+    <button class="modal-close" onclick="App.closeModal('settingsModal')">✕</button>
+    <div class="settings-grid">
+      <div class="setting-row">
+        <label>Board Theme</label>
+        <div class="theme-grid">
+          <div class="theme-btn active" onclick="App.setTheme('classic',this)">♜ Classic</div>
+          <div class="theme-btn"        onclick="App.setTheme('marble',this)">◻ Marble</div>
+          <div class="theme-btn"        onclick="App.setTheme('cyber',this)">⬡ Cyber</div>
+          <div class="theme-btn"        onclick="App.setTheme('mono',this)">▪ Mono</div>
+          <div class="theme-btn"        onclick="App.setTheme('emerald',this)">◆ Emerald</div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div class="toggle-wrap">
+          <label>Sound Effects</label>
+          <div class="toggle on" id="soundToggle" onclick="App.toggleSound()"></div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div class="toggle-wrap">
+          <label>Move Animations</label>
+          <div class="toggle on" id="animToggle" onclick="App.toggleAnim()"></div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div class="toggle-wrap">
+          <label>Particle Effects</label>
+          <div class="toggle on" id="particleToggle" onclick="App.toggleParticles()"></div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>Animation Speed</label>
+        <div class="seg-ctrl">
+          <div class="seg-btn"       onclick="App.setAnimSpeed(0.5,this)">Fast</div>
+          <div class="seg-btn active" onclick="App.setAnimSpeed(1,this)">Normal</div>
+          <div class="seg-btn"       onclick="App.setAnimSpeed(1.8,this)">Slow</div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>Clock Time</label>
+        <select id="clockSel">
+          <option value="300">5 min</option>
+          <option value="600" selected>10 min</option>
+          <option value="900">15 min</option>
+          <option value="1800">30 min</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn btn-gold btn-full" style="margin-top:16px" onclick="App.closeModal('settingsModal')">Done</button>
+  </div>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
