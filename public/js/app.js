@@ -613,7 +613,7 @@ const App = {
 
   initSocket(){
     if(this.socket)return;
-    this.socket=io('window.location.origin');
+    this.socket=io();
     let pingStart=0;
     this.socket.on('connect',()=>{ this.s3log.log('✅ WebSocket connected','ok'); pingStart=Date.now(); this.socket.emit('ping_check'); });
     this.socket.on('pong_check',()=>{ const ms=Date.now()-pingStart; const el=document.getElementById('pingDisplay'); if(el){el.textContent=ms+'ms'; el.className='latency '+(ms<100?'good':'bad');} });
