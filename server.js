@@ -73,10 +73,8 @@ app.post('/api/user/:userId', async (req, res) => {
     const { userId } = req.params;
     const { username } = req.body;
 
-    // Save actual data
     await s3Put(`users/${userId}.json`, { ...req.body, updatedAt: new Date().toISOString() });
 
-    // Update the phonebook (Username -> ID)
     const userMap = await getUserMap();
     userMap[username] = userId; 
     await s3Put('user_map.json', userMap);
@@ -100,8 +98,15 @@ app.post('/api/replay', async (req, res) => {
   }
 });
 
-// 4. Update Leaderboard
-app.post('/api/leaderboard', async (req, res) => {
+// 4. Update Leaderboard (BUG-14 FIX: In-Memory Write Queue for Race Conditions)
+let leaderboardLock = false;
+const leaderboardQueue = [];
+
+async function processLeaderboardQueue() {
+  if (leaderboardQueue.length === 0) { leaderboardLock = false; return; }
+  leaderboardLock = true;
+  
+  const { req, res } = leaderboardQueue.shift();
   try {
     let board = (await s3Get('leaderboard.json')) || [];
     const { userId, username, wins = 0, losses = 0, draws = 0 } = req.body;
@@ -114,11 +119,20 @@ app.post('/api/leaderboard', async (req, res) => {
     board.sort((a, b) => b.rating - a.rating);
     
     await s3Put('leaderboard.json', board);
-    res.json({ success: true });
+    res.json({ success: true, rank: board.findIndex(p => p.userId === userId) + 1 });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+  
+  // Recursively process the next item in the queue
+  processLeaderboardQueue();
+}
+
+app.post('/api/leaderboard', (req, res) => {
+  leaderboardQueue.push({ req, res });
+  if (!leaderboardLock) processLeaderboardQueue();
 });
+
 
 // 5. Fetch Lists (Leaderboard & Replays)
 app.get('/api/leaderboard', async (req, res) => {
@@ -128,8 +142,21 @@ app.get('/api/leaderboard', async (req, res) => {
 
 app.get('/api/replays', async (req, res) => {
   try {
-    const list = await s3.listObjectsV2({ Bucket: BUCKET, Prefix: 'replays/' }).promise();
-    res.json((list.Contents || []).map(o => ({
+    // BUG-16 FIX: AWS S3 Pagination Loop (Prevents truncation at 1000 objects)
+    const results = [];
+    let token;
+    do {
+      const resp = await s3.listObjectsV2({
+        Bucket: BUCKET, 
+        Prefix: 'replays/',
+        ...(token && { ContinuationToken: token })
+      }).promise();
+      
+      results.push(...(resp.Contents || []));
+      token = resp.IsTruncated ? resp.NextContinuationToken : null;
+    } while (token);
+
+    res.json(results.map(o => ({
       gameId: o.Key.replace('replays/', '').replace('.json', ''),
       date: o.LastModified
     })));
@@ -139,6 +166,7 @@ app.get('/api/replays', async (req, res) => {
 // Health Check
 app.get('/health', (req, res) => res.json({ status: 'live', bucket: BUCKET }));
 
+
 // ===================== WEBSOCKET — MULTIPLAYER =====================
 const rooms = new Map();
 
@@ -147,15 +175,35 @@ io.on('connection', socket => {
 
   socket.on('ping_check', () => socket.emit('pong_check'));
 
-  socket.on('create_room', ({ roomId, username }) => {
+  socket.on('create_room', async ({ roomId, username }) => {
     if (rooms.has(roomId)) return socket.emit('room_error', 'Room occupied');
-    rooms.set(roomId, { players: [{ id: socket.id, username, color: 'w' }] });
+    
+    // BUG-05 & BUG-15 FIX: Track turns, moves, and persist to S3
+    const newRoom = { 
+      roomId,
+      players: [{ id: socket.id, username, color: 'w' }],
+      currentTurn: 'w',
+      moves: [],
+      createdAt: Date.now()
+    };
+    
+    rooms.set(roomId, newRoom);
     socket.join(roomId);
     socket.emit('room_created', { color: 'w', roomId });
+    
+    // Backup room to S3
+    s3Put(`rooms/${roomId}.json`, newRoom).catch(console.error);
   });
 
-  socket.on('join_room', ({ roomId, username }) => {
-    const room = rooms.get(roomId);
+  socket.on('join_room', async ({ roomId, username }) => {
+    let room = rooms.get(roomId);
+    
+    // BUG-15 FIX: Attempt to recover room from S3 if server restarted
+    if (!room) {
+       room = await s3Get(`rooms/${roomId}.json`);
+       if(room) rooms.set(roomId, room);
+    }
+    
     if (!room) return socket.emit('room_error', 'Room not found');
     if (room.players.length >= 2) return socket.emit('room_error', 'Room full');
     
@@ -167,10 +215,42 @@ io.on('connection', socket => {
       white: room.players[0].username,
       black: room.players[1].username
     });
+
+    s3Put(`rooms/${roomId}.json`, room).catch(console.error);
+  });
+
+  // BUG-15 FIX: Recover a disconnected player into a live game
+  socket.on('rejoin_room', async ({ roomId, username }) => {
+     let roomData = await s3Get(`rooms/${roomId}.json`);
+     if (!roomData) return socket.emit('room_error', 'Room expired');
+     
+     const player = roomData.players.find(p => p.username === username);
+     if (!player) return socket.emit('room_error', 'Not in this room');
+     
+     player.id = socket.id; // Update to their new socket ID
+     rooms.set(roomId, roomData); // Bring back into active memory
+     socket.join(roomId);
   });
 
   socket.on('move', ({ roomId, move }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    // BUG-05 FIX: Server-Side Strict Move Validation
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player || player.color !== room.currentTurn) {
+      console.log(`❌ Rejected move from ${player ? player.username : 'Unknown'} in room ${roomId} (Not their turn)`);
+      return socket.emit('move_rejected', { reason: 'Not your turn' });
+    }
+
+    // Apply move and flip turn
+    room.moves.push(move);
+    room.currentTurn = room.currentTurn === 'w' ? 'b' : 'w';
+    
     socket.to(roomId).emit('opponent_move', move);
+    
+    // Background async backup to S3
+    s3Put(`rooms/${roomId}.json`, room).catch(console.error);
   });
 
   socket.on('disconnect', () => {
@@ -178,7 +258,7 @@ io.on('connection', socket => {
       const p = room.players.find(p => p.id === socket.id);
       if (p) {
         socket.to(roomId).emit('opponent_disconnected', { username: p.username });
-        rooms.delete(roomId);
+        rooms.delete(roomId); // Note: It remains in S3 if they want to 'rejoin_room' later
         break;
       }
     }
