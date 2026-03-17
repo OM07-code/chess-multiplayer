@@ -28,14 +28,16 @@ export class BoardRenderer {
       const sq=document.createElement('div');
       sq.className='sq '+((dr+dc)%2===0?'light':'dark');
       
-      // FIX: Assign logical engine coordinates, not visual coordinates!
+      // Keeping the logical coordinate fix!
       sq.dataset.r=r; 
       sq.dataset.c=c; 
       
       sq.style.cssText=`left:${dc*s}px;top:${dr*s}px;position:absolute;width:${s}px;height:${s}px;`;
       board.appendChild(sq);
     }
-    // Note: Do not call _rebuildPieces here (we fixed that duplicate bug earlier)
+    
+    // ADD THIS LINE BACK IN! This clears the memory cache and rebuilds the pieces.
+    this._rebuildPieces(); 
   }
 
   _rebuildPieces(){
