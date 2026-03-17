@@ -38,7 +38,7 @@ const App = {
   replayIdx: 0,
   replayPlaying: false,
   replayTimer: null,
-  _fullHistory: [],
+  _fullHistory: [], // BUG-04 FIX: Preserve history
   profile: {userId:'',username:'Guest',wins:0,losses:0,draws:0,rating:1200},
   settings: {sound:true,anim:true,particles:true,animSpeed:1,theme:'classic',clock:600},
 
@@ -46,6 +46,7 @@ const App = {
     try{ const s=localStorage.getItem('cm_settings'); if(s)this.settings={...this.settings,...JSON.parse(s)}; }catch(e){}
     try{ const p=localStorage.getItem('cm_profile'); if(p)this.profile={...this.profile,...JSON.parse(p)}; }catch(e){}
     
+    // BUG-06 FIX: Stable Identity Generation
     let storedId = null;
     try { storedId = localStorage.getItem('cm_userId'); } catch(e) {}
     if (!storedId) {
@@ -82,6 +83,7 @@ const App = {
       sq.style.transform='scale(0.8)';
       setTimeout(()=>{ sq.style.transition='opacity 0.2s,transform 0.2s cubic-bezier(.25,.8,.25,1.2)'; sq.style.opacity='1'; sq.style.transform=''; },i*8);
     });
+    // BUG-12 FIX: Removed this.renderer._rebuildPieces() to prevent duplicates
     setTimeout(()=>{ this.renderer.render(null,[]); },200);
   },
 
@@ -114,6 +116,7 @@ const App = {
   },
 
   handleDrop(fr,fc,tr,tc){
+    // BUG-08 FIX: Added this.boardLocked guard
     if(!this.gameActive || this.boardLocked || this.replayMode) return; 
     const move=this.legalMoves.find(m=>m.to[0]===tr&&m.to[1]===tc);
     if(move){ if(move.special==='promo'){this.showPromoModal(move);return;} this.executeMove(move); }
@@ -137,9 +140,7 @@ const App = {
     }
 
     this.game.makeMove(move);
-    
-    // BUG-03 FIX: Use moveHistory
-    this._fullHistory = [...this.game.moveHistory];
+    this._fullHistory = [...this.game.history]; // BUG-04 FIX: Snapshot full history
 
     if(move.special==='castleK'||move.special==='castleQ') this.sound.castle();
     else if(wasCapture) this.sound.capture();
@@ -196,8 +197,7 @@ const App = {
     setTimeout(()=>{ 
       if(!this.gameActive || this.game.turn !== this.aiColor) return; 
       
-      // BUG-01 FIX: Use getBestMove
-      const move = this.ai.getBestMove(this.game); 
+      const move = this.ai.getBest(this.game); 
       if(move) {
         this.executeMove(move); 
       }
@@ -205,12 +205,13 @@ const App = {
   },
 
   newGame(){
+    // BUG-07 FIX: Prevent breaking online games
     if (this.mode === 'online') {
       this.toast.show('Start a new game from the Online tab', 'info');
       return;
     }
 
-    this._fullHistory = []; 
+    this._fullHistory = []; // BUG-04 Reset
     this.replayMode = false; 
     this.replayIdx = 0;
     this.stopReplayPlay();
@@ -244,7 +245,7 @@ const App = {
       this.updateCaptured(); 
       this.updateStatus(); 
       this.updatePlayerBars();
-      this.setNamesForMode(); 
+      this.setNamesForMode(); // BUG-18 FIX
       this.sound.start();
       
       document.getElementById('boardWrap').classList.remove('victory');
@@ -274,6 +275,7 @@ const App = {
 
   flipBoard(){ this.renderer.flip(); this.renderer.render(null,[]); },
 
+  // Shared end-game helper for saving records properly
   _onGameEnd() {
     this.saveReplay();
     this.pushLeaderboard();
@@ -286,7 +288,7 @@ const App = {
     const winner=this.game.opp(this.game.turn);
     this.showGameOver(winner==='w'?'White Wins':'Black Wins','by resignation ✦',false);
     this.profile.losses++; this.saveSettingsLocal();
-    this._onGameEnd(); 
+    this._onGameEnd(); // BUG-09 FIX
     document.getElementById('resignBtn').disabled=true;
   },
 
@@ -297,7 +299,7 @@ const App = {
       this.gameActive=false; this.stopClock(); 
       this.showGameOver('Draw','by agreement',false); 
       this.profile.draws++; this.saveSettingsLocal(); 
-      this._onGameEnd(); 
+      this._onGameEnd(); // BUG-10 FIX
     }
   },
 
@@ -355,6 +357,7 @@ const App = {
   stopClock(){ clearInterval(this.clockInterval); this.clockInterval=null; },
   
   updateClocks(){
+    // BUG-17 FIX: Removed unused variables
     ['w','b'].forEach(co=>{
       const isPlayerWhite=(this.playerColor==='w'||this.mode!=='ai');
       const clockId=(co==='w')?(isPlayerWhite?'clockPlayer':'clockOpponent'):(isPlayerWhite?'clockOpponent':'clockPlayer');
@@ -395,8 +398,7 @@ const App = {
 
   updateMoveList(){
     const el=document.getElementById('moveList');
-    // BUG-03 FIX: Use moveHistory
-    const h=this.game.moveHistory;
+    const h=this.game.history;
     el.innerHTML='';
     const frag=document.createDocumentFragment();
     for(let i=0;i<h.length;i+=2){
@@ -415,35 +417,31 @@ const App = {
 
   updateCaptured(){
     const V={Q:9,R:5,B:3,N:3,P:1};
-    // BUG-02 FIX: Use capturedPieces
-    const ws=this.game.capturedPieces.w.reduce((s,p)=>s+(V[p[1]]||0),0);
-    const bs=this.game.capturedPieces.b.reduce((s,p)=>s+(V[p[1]]||0),0);
-    const pl=this.game.capturedPieces.b.map(p=>PIECES[p]).join('')+(ws>bs?`<span class="material-adv">+${ws-bs}</span>`:'');
-    const op=this.game.capturedPieces.w.map(p=>PIECES[p]).join('')+(bs>ws?`<span class="material-adv">+${bs-ws}</span>`:'');
+    const ws=this.game.captured.w.reduce((s,p)=>s+(V[p[1]]||0),0);
+    const bs=this.game.captured.b.reduce((s,p)=>s+(V[p[1]]||0),0);
+    const pl=this.game.captured.b.map(p=>PIECES[p]).join('')+(ws>bs?`<span class="material-adv">+${ws-bs}</span>`:'');
+    const op=this.game.captured.w.map(p=>PIECES[p]).join('')+(bs>ws?`<span class="material-adv">+${bs-ws}</span>`:'');
     const playerIsWhite=(this.playerColor==='w'||this.mode==='local');
     document.getElementById('capturedPlayer').innerHTML=playerIsWhite?pl:op;
     document.getElementById('capturedOpponent').innerHTML=playerIsWhite?op:pl;
   },
 
   jumpToMove(idx){
-    // BUG-03 FIX: Use moveHistory
-    const allMoves = this._fullHistory && this._fullHistory.length > 0 ? this._fullHistory : [...this.game.moveHistory];
+    // BUG-04 FIX: Use _fullHistory
+    const allMoves = this._fullHistory && this._fullHistory.length > 0 ? this._fullHistory : [...this.game.history];
     this.game.reset();
     for(let i=0;i<Math.min(idx,allMoves.length);i++) this.game.makeMove(allMoves[i]);
     this.replayIdx=idx;
     this.renderer.initBoard();
     setTimeout(()=>{ this.renderer.render(null,[]); this.updateStatus(); this.updateCaptured(); this.updateMoveList(); },50);
   },
-  
-  // BUG-03 FIX: Use moveHistory
-  replayFirst(){ if(this.game.moveHistory.length)this.jumpToMove(0); },
-  replayLast(){ this.jumpToMove((this._fullHistory && this._fullHistory.length > 0 ? this._fullHistory : this.game.moveHistory).length); },
+  replayFirst(){ if(this.game.history.length)this.jumpToMove(0); },
+  replayLast(){ this.jumpToMove((this._fullHistory && this._fullHistory.length > 0 ? this._fullHistory : this.game.history).length); },
   replayPrev(){ if(this.replayIdx>0)this.jumpToMove(this.replayIdx-1); },
   replayNext(){ 
-    const max = (this._fullHistory && this._fullHistory.length > 0 ? this._fullHistory : this.game.moveHistory).length;
+    const max = (this._fullHistory && this._fullHistory.length > 0 ? this._fullHistory : this.game.history).length;
     if(this.replayIdx < max) this.jumpToMove(this.replayIdx+1); 
   },
-  
   scrubReplay(val){ this.jumpToMove(parseInt(val)); },
   toggleReplayPlay(){
     this.replayPlaying=!this.replayPlaying;
@@ -453,8 +451,7 @@ const App = {
   stopReplayPlay(){ this.replayPlaying=false; clearTimeout(this.replayTimer); document.getElementById('replayPlayBtn').textContent='▶'; },
   _playReplayStep(){
     if(!this.replayPlaying)return;
-    // BUG-03 FIX: Use moveHistory
-    if(this.replayIdx>=this.game.moveHistory.length){ this.stopReplayPlay(); return; }
+    if(this.replayIdx>=this.game.history.length){ this.stopReplayPlay(); return; }
     this.replayNext();
     this.replayTimer=setTimeout(()=>this._playReplayStep(),600*this.settings.animSpeed);
   },
@@ -579,10 +576,9 @@ const App = {
   },
 
   async saveReplay(){
-    // BUG-03 FIX: Use moveHistory
-    if(this.game.moveHistory.length<4)return;
+    if(this.game.history.length<4)return;
     try{
-      const d=await this.api.post('/api/replay',{userId:this.profile.userId,username:this.profile.username,moves:this.game.moveHistory,result:this.game.status,mode:this.mode,date:new Date().toISOString()});
+      const d=await this.api.post('/api/replay',{userId:this.profile.userId,username:this.profile.username,moves:this.game.history,result:this.game.status,mode:this.mode,date:new Date().toISOString()});
       this.s3log.log(`✅ Replay → S3: replays/${d.gameId}.json`,'ok');
       this.toast.show('Game replay saved to S3 ☁','success');
     }catch(e){ this.s3log.log('❌ Replay save failed','err'); }
@@ -645,9 +641,11 @@ const App = {
       this.s3log.log('✅ WebSocket connected','ok'); 
       pingStart=Date.now(); 
       this.socket.emit('ping_check'); 
+      // BUG-13 FIX: Store interval ID
       this.pingInterval = setInterval(()=>{ if(this.socket){pingStart=Date.now();this.socket.emit('ping_check');} },3000);
     });
     
+    // BUG-13 FIX: Clear interval on disconnect
     this.socket.on('disconnect', () => { clearInterval(this.pingInterval); });
 
     this.socket.on('pong_check',()=>{ const ms=Date.now()-pingStart; const el=document.getElementById('pingDisplay'); if(el){el.textContent=ms+'ms'; el.className='latency '+(ms<100?'good':'bad');} });
@@ -684,7 +682,7 @@ const App = {
       this.gameActive=false; this.stopClock(); 
       this.toast.show(`${username} disconnected — you win!`,'info'); 
       this.profile.wins++; 
-      this._onGameEnd(); 
+      this._onGameEnd(); // BUG-11 FIX
     });
     
     this.socket.on('game_over_mp',({reason})=>{ this.gameActive=false; this.stopClock(); this.showGameOver('Game Over',reason==='resign'?'Opponent resigned':'Draw agreed'); });
@@ -711,8 +709,10 @@ const App = {
   resignOnline(){ if(this.socket&&this.roomId)this.socket.emit('resign',{roomId:this.roomId}); },
 };
 
+// Expose App globally so inline HTML triggers (onclick="App...") still work perfectly
 window.App = App;
 
+// Event Listeners
 document.getElementById('board').addEventListener('click', e=>{
   const sq=e.target.closest('.sq');
   if(!sq)return;
@@ -738,4 +738,5 @@ document.addEventListener('keydown',e=>{
   if(e.key==='n'||e.key==='N')App.newGame();
 });
 
+// Initialize
 App.init();
