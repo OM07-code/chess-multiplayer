@@ -17,8 +17,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ===================== AWS S3 SETUP =====================
 const s3 = new AWS.S3({
-  region: process.env.AWS_REGION || 'ap-south-1', // Mumbai is default for MH
-  // Uses IAM Role on EC2 automatically. If local, uses .env keys:
+  region: process.env.AWS_REGION || 'ap-south-1', 
   ...(process.env.AWS_ACCESS_KEY_ID && {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
@@ -52,7 +51,7 @@ async function getUserMap() {
 
 // ===================== REST API =====================
 
-// 1. Load profile by USERNAME (Lookup logic)
+// 1. Load profile by USERNAME 
 app.get('/api/user/by-name/:username', async (req, res) => {
   try {
     const userMap = await getUserMap();
@@ -98,7 +97,7 @@ app.post('/api/replay', async (req, res) => {
   }
 });
 
-// 4. Update Leaderboard (BUG-14 FIX: In-Memory Write Queue for Race Conditions)
+// 4. Update Leaderboard (With In-Memory Write Queue)
 let leaderboardLock = false;
 const leaderboardQueue = [];
 
@@ -124,7 +123,6 @@ async function processLeaderboardQueue() {
     res.status(500).json({ error: e.message });
   }
   
-  // Recursively process the next item in the queue
   processLeaderboardQueue();
 }
 
@@ -132,7 +130,6 @@ app.post('/api/leaderboard', (req, res) => {
   leaderboardQueue.push({ req, res });
   if (!leaderboardLock) processLeaderboardQueue();
 });
-
 
 // 5. Fetch Lists (Leaderboard & Replays)
 app.get('/api/leaderboard', async (req, res) => {
@@ -142,7 +139,6 @@ app.get('/api/leaderboard', async (req, res) => {
 
 app.get('/api/replays', async (req, res) => {
   try {
-    // BUG-16 FIX: AWS S3 Pagination Loop (Prevents truncation at 1000 objects)
     const results = [];
     let token;
     do {
@@ -178,7 +174,6 @@ io.on('connection', socket => {
   socket.on('create_room', async ({ roomId, username }) => {
     if (rooms.has(roomId)) return socket.emit('room_error', 'Room occupied');
     
-    // BUG-05 & BUG-15 FIX: Track turns, moves, and persist to S3
     const newRoom = { 
       roomId,
       players: [{ id: socket.id, username, color: 'w' }],
@@ -191,14 +186,12 @@ io.on('connection', socket => {
     socket.join(roomId);
     socket.emit('room_created', { color: 'w', roomId });
     
-    // Backup room to S3
     s3Put(`rooms/${roomId}.json`, newRoom).catch(console.error);
   });
 
   socket.on('join_room', async ({ roomId, username }) => {
     let room = rooms.get(roomId);
     
-    // BUG-15 FIX: Attempt to recover room from S3 if server restarted
     if (!room) {
        room = await s3Get(`rooms/${roomId}.json`);
        if(room) rooms.set(roomId, room);
@@ -219,7 +212,6 @@ io.on('connection', socket => {
     s3Put(`rooms/${roomId}.json`, room).catch(console.error);
   });
 
-  // BUG-15 FIX: Recover a disconnected player into a live game
   socket.on('rejoin_room', async ({ roomId, username }) => {
      let roomData = await s3Get(`rooms/${roomId}.json`);
      if (!roomData) return socket.emit('room_error', 'Room expired');
@@ -227,8 +219,8 @@ io.on('connection', socket => {
      const player = roomData.players.find(p => p.username === username);
      if (!player) return socket.emit('room_error', 'Not in this room');
      
-     player.id = socket.id; // Update to their new socket ID
-     rooms.set(roomId, roomData); // Bring back into active memory
+     player.id = socket.id; 
+     rooms.set(roomId, roomData); 
      socket.join(roomId);
   });
 
@@ -236,29 +228,41 @@ io.on('connection', socket => {
     const room = rooms.get(roomId);
     if (!room) return;
 
-    // BUG-05 FIX: Server-Side Strict Move Validation
     const player = room.players.find(p => p.id === socket.id);
     if (!player || player.color !== room.currentTurn) {
       console.log(`❌ Rejected move from ${player ? player.username : 'Unknown'} in room ${roomId} (Not their turn)`);
       return socket.emit('move_rejected', { reason: 'Not your turn' });
     }
 
-    // Apply move and flip turn
     room.moves.push(move);
     room.currentTurn = room.currentTurn === 'w' ? 'b' : 'w';
     
     socket.to(roomId).emit('opponent_move', move);
-    
-    // Background async backup to S3
     s3Put(`rooms/${roomId}.json`, room).catch(console.error);
   });
+
+  // --- MISSING SYNC FIXES ADDED HERE ---
+  socket.on('offer_draw', ({ roomId }) => {
+    socket.to(roomId).emit('draw_offered');
+  });
+
+  socket.on('accept_draw', ({ roomId }) => {
+    io.to(roomId).emit('game_over_mp', { reason: 'draw' });
+    rooms.delete(roomId);
+  });
+
+  socket.on('resign', ({ roomId }) => {
+    socket.to(roomId).emit('game_over_mp', { reason: 'resign' });
+    rooms.delete(roomId);
+  });
+  // -------------------------------------
 
   socket.on('disconnect', () => {
     for (const [roomId, room] of rooms.entries()) {
       const p = room.players.find(p => p.id === socket.id);
       if (p) {
         socket.to(roomId).emit('opponent_disconnected', { username: p.username });
-        rooms.delete(roomId); // Note: It remains in S3 if they want to 'rejoin_room' later
+        rooms.delete(roomId); 
         break;
       }
     }

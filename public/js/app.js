@@ -706,7 +706,23 @@ const App = {
     this.socket.emit('join_room',{roomId:code,username:name});
   },
   
-  resignOnline(){ if(this.socket&&this.roomId)this.socket.emit('resign',{roomId:this.roomId}); },
+  resignOnline(){ 
+    if(this.socket && this.roomId){
+      // 1. Tell the server to notify opponent
+      this.socket.emit('resign', {roomId: this.roomId}); 
+      
+      // 2. Instantly end the game locally
+      this.gameActive = false; 
+      this.stopClock();
+      
+      const winner = this.game.opp(this.myColor);
+      this.showGameOver(winner === 'w' ? 'White Wins' : 'Black Wins', 'by resignation ✦', false);
+      
+      this.profile.losses++; 
+      this.saveSettingsLocal();
+      this._onGameEnd();
+    }
+  },
 };
 
 // Expose App globally so inline HTML triggers (onclick="App...") still work perfectly

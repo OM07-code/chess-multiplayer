@@ -27,11 +27,15 @@ export class BoardRenderer {
       const dr=this.flipped?7-r:r, dc=this.flipped?7-c:c;
       const sq=document.createElement('div');
       sq.className='sq '+((dr+dc)%2===0?'light':'dark');
-      sq.dataset.r=dr; sq.dataset.c=dc;
+      
+      // FIX: Assign logical engine coordinates, not visual coordinates!
+      sq.dataset.r=r; 
+      sq.dataset.c=c; 
+      
       sq.style.cssText=`left:${dc*s}px;top:${dr*s}px;position:absolute;width:${s}px;height:${s}px;`;
       board.appendChild(sq);
     }
-    this._rebuildPieces();
+    // Note: Do not call _rebuildPieces here (we fixed that duplicate bug earlier)
   }
 
   _rebuildPieces(){
