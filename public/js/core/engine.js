@@ -10,8 +10,11 @@ export class Chess {
       ['wR','wN','wB','wQ','wK','wB','wN','wR']
     ];
     this.turn='w'; this.castling={wK:true,wQ:true,bK:true,bQ:true};
-    this.enPassant=null; this.history=[]; this.status='playing';
-    this.half=0; this.captured={w:[],b:[]};
+    this.enPassant=null; 
+    this.moveHistory=[]; // BUG-03 FIX
+    this.status='playing';
+    this.half=0; 
+    this.capturedPieces={w:[],b:[]}; // BUG-02 FIX
   }
   col(p){return p?p[0]:null;}
   opp(c){return c==='w'?'b':'w';}
@@ -20,8 +23,8 @@ export class Chess {
     const g=new Chess();
     g.board=this.board.map(r=>[...r]); g.turn=this.turn;
     g.castling={...this.castling}; g.enPassant=this.enPassant?[...this.enPassant]:null;
-    g.history=[...this.history]; g.status=this.status; g.half=this.half;
-    g.captured={w:[...this.captured.w],b:[...this.captured.b]};
+    g.moveHistory=[...this.moveHistory]; g.status=this.status; g.half=this.half;
+    g.capturedPieces={w:[...this.capturedPieces.w],b:[...this.capturedPieces.b]};
     return g;
   }
   findKing(board,color){
@@ -29,7 +32,6 @@ export class Chess {
     return null;
   }
   
-  // FIXED isAttacked logic
   isAttacked(board,row,col,by){
     const op=by;
     const pr=op==='w'?row+1:row-1;
@@ -144,8 +146,14 @@ export class Chess {
   makeMove(move){
     const{board:nb,castling:nc,enPassant:nep}=this.applyMove(this.board,move,this.castling,this.enPassant);
     this.board=nb;this.castling=nc;this.enPassant=nep;
-    if(move.capture)this.captured[this.turn].push(move.capture);
-    this.history.push(move);this.turn=this.opp(this.turn);
+    
+    // BUG-02 FIX: updated property name
+    if(move.capture)this.capturedPieces[this.turn].push(move.capture);
+    
+    // BUG-03 FIX: updated property name
+    this.moveHistory.push(move);
+    
+    this.turn=this.opp(this.turn);
     const legal=this.getLegal(this.board,this.turn,this.castling,this.enPassant);
     const inCk=this.isInCheck(this.board,this.turn);
     if(!legal.length)this.status=inCk?'checkmate':'stalemate';

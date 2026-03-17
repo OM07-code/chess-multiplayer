@@ -56,7 +56,8 @@ export class ChessAI {
     }
   }
   
-  getBest(eng){
+  // BUG-01 FIX: Renamed from getBest to getBestMove
+  getBestMove(eng){
     const co=eng.turn;
     const legal=eng.getLegal(eng.board,co,eng.castling,eng.enPassant);
     if(!legal.length)return null;
@@ -67,7 +68,6 @@ export class ChessAI {
       [legal[i],legal[j]]=[legal[j],legal[i]];
     }
     
-    // FIX: Fallback to the first legal move so it NEVER freezes
     let best=legal[0]; 
     let bestS=co==='w'?-Infinity:Infinity;
     
